@@ -1,16 +1,12 @@
 import os
-import json
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import time
 
 ACCOUNT_FILE = "account_information.txt"
+REQUEST_RESPONSE_FILE = "am_comm.txt"
 accounts = {}  # Format: {username: {"id": user_id, "password": password}}
 next_account_id = 1
 
 def load_accounts():
-    """
-    Loads account information from ACCOUNT_FILE.
-    Expected format per line: username, password, user_id
-    """
     global accounts, next_account_id
     accounts = {}
     if not os.path.exists(ACCOUNT_FILE):
@@ -21,10 +17,10 @@ def load_accounts():
         for line in f:
             line = line.strip()
             if not line:
-                continue  # skip blank lines
+                continue
             parts = line.split(",")
             if len(parts) != 3:
-                continue  # skip malformed lines
+                continue
             username = parts[0].strip()
             password = parts[1].strip()
             try:
@@ -39,9 +35,6 @@ def load_accounts():
         next_account_id = 1
 
 def save_accounts():
-    """
-    Saves the current account information to ACCOUNT_FILE.
-    """
     with open(ACCOUNT_FILE, "w") as f:
         for username, info in accounts.items():
             f.write(f"{username}, {info['password']}, {info['id']}\n")
@@ -49,84 +42,79 @@ def save_accounts():
 # Load accounts at startup
 load_accounts()
 
-class RequestHandler(BaseHTTPRequestHandler):
-    def _send_response(self, status_code, response_data):
-        """
-        Sends a JSON response to the client.
-        """
-        self.send_response(status_code)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(json.dumps(response_data).encode())
+def process_request():
+    global next_account_id, accounts
 
-    def do_POST(self):
-        global next_account_id, accounts
-        
-        if self.path != "/account":
-            self._send_response(404, {"error": "Not found"})
-            return
-        
-        # Read and parse JSON request body
-        content_length = int(self.headers["Content-Length"])
-        post_data = self.rfile.read(content_length).decode()
-        
-        try:
-            data = json.loads(post_data)
-        except json.JSONDecodeError:
-            self._send_response(400, {"error": "Invalid JSON format"})
-            return
-        
-        action = data.get("action")
-        username = data.get("username")
-        password = data.get("password")
+    if not os.path.exists(REQUEST_RESPONSE_FILE):
+        return
 
-        if action is None or username is None or password is None:
-            self._send_response(400, {"error": "Missing parameters. Provide action, username, and password."})
-            return
-        
-        # Action 0: Check credentials and return account ID
-        if action == 0:
-            if username not in accounts:
-                self._send_response(400, {"error": "No Account with that Username"})
-                return
-            if accounts[username]['password'] != password:
-                self._send_response(400, {"error": "Password Incorrect"})
-                return
-            self._send_response(200, {"message": "Credentials verified.", "account_id": accounts[username]['id']})
-            return
+    with open(REQUEST_RESPONSE_FILE, "r") as f:
+        request_line = f.readline().strip()
 
-        # Action 1: Create a new account
-        if action == 1:
-            if username in accounts:
-                self._send_response(400, {"error": "Account already exists."})
-                return
+    if not request_line:
+        return  # No request to process
+
+    parts = request_line.split(",")  # Format: action, username, password
+
+    if len(parts) != 3:
+        write_response("ERROR: Invalid request format")
+        return
+    
+    try:
+        action = int(parts[0].strip())
+        username = parts[1].strip()
+        password = parts[2].strip()
+    except ValueError:
+        write_response("ERROR: Invalid action format")
+        return
+
+    # Processing actions
+    if action == 0:
+        if username not in accounts:
+            response = "ERROR: No account with that username"
+        elif accounts[username]['password'] != password:
+            response = "ERROR: Password incorrect"
+        else:
+            response = f"SUCCESS: Verified, ID {accounts[username]['id']}"
+    
+    elif action == 1:
+        if username in accounts:
+            response = "ERROR: Account already exists"
+        else:
             account_id = next_account_id
             accounts[username] = {'id': account_id, 'password': password}
             next_account_id += 1
             save_accounts()
-            self._send_response(201, {"message": "Account created successfully.", "account_id": account_id})
-            return
+            response = f"SUCCESS: Account created, ID {account_id}"
 
-        # Action 2: Delete an account
-        if action == 2:
-            if username not in accounts:
-                self._send_response(400, {"error": "No Account with that Username"})
-                return
-            if accounts[username]['password'] != password:
-                self._send_response(400, {"error": "Password Incorrect"})
-                return
+    elif action == 2:
+        if username not in accounts:
+            response = "ERROR: No account with that username"
+        elif accounts[username]['password'] != password:
+            response = "ERROR: Password incorrect"
+        else:
             del accounts[username]
             save_accounts()
-            self._send_response(200, {"message": "Account deleted successfully."})
-            return
+            response = "SUCCESS: Account deleted"
+    else:
+        response = "ERROR: Invalid action (use 0, 1, or 2)"
 
-        self._send_response(400, {"error": "Invalid action. Use 1 (create), 2 (delete), or 0 (verify)."})
+    write_response(response)
 
-def run_server(port=5005):
-    server_address = ("", port)
-    httpd = HTTPServer(server_address, RequestHandler)
-    print(f"Server running on port {port}...")
-    httpd.serve_forever()
+def write_response(response):
+    """
+    Writes the response and clears the previous request.
+    """
+    with open(REQUEST_RESPONSE_FILE, "w") as f:
+        f.write(response + "\n")
+
+def run_server():
+    print("Server running... Waiting for requests in am_comm.txt")
+
+    while True:
+        if os.path.exists(REQUEST_RESPONSE_FILE):
+            process_request()
+        time.sleep(1)  # Poll every second
 
 if __name__ == "__main__":
     run_server()
