@@ -57,7 +57,6 @@ def process_request():
     parts = request_line.split(",")  # Format: action, username, password
 
     if len(parts) != 3:
-        write_response("ERROR: Invalid request format")
         return
     
     try:
@@ -65,7 +64,6 @@ def process_request():
         username = parts[1].strip()
         password = parts[2].strip()
     except ValueError:
-        write_response("ERROR: Invalid action format")
         return
 
     # Processing actions
